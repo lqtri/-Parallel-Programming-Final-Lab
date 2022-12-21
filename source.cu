@@ -108,6 +108,59 @@ void writePnm(uchar3 * pixels, int width, int height, char * fileName)
 	fclose(f);
 }
 
+void convertRgb2Gray(uint8_t * inPixels, int width, int height,
+		uint8_t * outPixels, 
+		bool useDevice=false, dim3 blockSize=dim3(1))
+{
+	GpuTimer timer;
+	timer.Start();
+	if (useDevice == false)
+	{
+        // Reminder: gray = 0.299*red + 0.587*green + 0.114*blue  
+        for (int r = 0; r < height; r++)
+        {
+            for (int c = 0; c < width; c++)
+            {
+                int i = r * width + c;
+                uint8_t red = inPixels[3 * i];
+                uint8_t green = inPixels[3 * i + 1];
+                uint8_t blue = inPixels[3 * i + 2];
+                outPixels[i] = 0.299f*red + 0.587f*green + 0.114f*blue;
+            }
+        }
+	}
+	else // use device
+	{
+		size_t nBytes = width * height * sizeof(uint8_t);
+		cudaDeviceProp devProp;
+		cudaGetDeviceProperties(&devProp, 0);
+		printf("GPU name: %s\n", devProp.name);
+		printf("GPU compute capability: %d.%d\n", devProp.major, devProp.minor);
+
+		// Host allocates memories on device
+		uint8_t *d_inPixels,*d_outPixels;
+
+		CHECK(cudaMalloc(&d_inPixels, nBytes*3));
+		CHECK(cudaMalloc(&d_outPixels, nBytes));
+		// Host copies data to device memories
+		CHECK(cudaMemcpy(d_inPixels, inPixels, nBytes*3, cudaMemcpyHostToDevice));
+		// Host invokes kernel function to add vectors on device
+		dim3 gridSize((width - 1) / blockSize.x + 1, 
+                (height - 1) / blockSize.y + 1);
+		convertRgb2GrayKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, d_outPixels);
+		// Host copies result from device memory
+		CHECK(cudaMemcpy(outPixels, d_outPixels, nBytes, cudaMemcpyDeviceToHost));
+		// Host frees device memories
+		CHECK(cudaFree(d_inPixels));
+		CHECK(cudaFree(d_outPixels));
+
+	}
+	timer.Stop();
+	float time = timer.Elapsed();
+	printf("Processing time (%s): %f ms\n\n", 
+			useDevice == true? "use device" : "use host", time);
+}
+
 
 char * concatStr(const char * s1, const char * s2)
 {
