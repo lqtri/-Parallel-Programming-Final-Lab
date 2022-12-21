@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdint.h>
 
-#define FILTER_WIDTH 9
+#define FILTER_WIDTH 3
 __constant__ float dc_filter[FILTER_WIDTH * FILTER_WIDTH];
 
 #define CHECK(call)\
@@ -147,12 +147,19 @@ int main(int argc, char ** argv)
 	readPnm(argv[1], width, height, inPixels);
 	printf("\nImage size (width x height): %i x %i\n", width, height);
 
-	// Set up a simple filter
+    int filterWidth = FILTER_WIDTH;
+    //vertical sobel
+    float * verticalSobel = (float *)malloc(filterWidth * filterWidth * sizeof(float));
+	verticalSobel = {-1,0,1,-2,0,2,-1,0,1}
+    //horizontal sobel
+    float * horizontalSobel = (float *)malloc(filterWidth * filterWidth * sizeof(float));
+	horizontalSobel = {-1,-2,-1,0,0,0,1,2,1}
+
+	// Set up a simple filter 
 
 
 	// Blur input image not using device
-	uchar3 * correctOutPixels = (uchar3 *)malloc(width * height * sizeof(uchar3)); 
-	blurImg(inPixels, width, height, filter, filterWidth, correctOutPixels);
+	
 	
     // Blur input image using device, kernel 1
     dim3 blockSize(32, 32); // Default
