@@ -108,8 +108,8 @@ void writePnm(uchar3 * pixels, int width, int height, char * fileName)
 	fclose(f);
 }
 
-void convertRgb2Gray(uint8_t * inPixels, int width, int height,
-		uint8_t * outPixels, 
+void convertRgb2Gray(uchar3 * inPixels, int width, int height,
+		uchar3 * outPixels, 
 		bool useDevice=false, dim3 blockSize=dim3(1))
 {
 	GpuTimer timer;
@@ -122,10 +122,10 @@ void convertRgb2Gray(uint8_t * inPixels, int width, int height,
             for (int c = 0; c < width; c++)
             {
                 int i = r * width + c;
-                uint8_t red = inPixels[3 * i];
-                uint8_t green = inPixels[3 * i + 1];
-                uint8_t blue = inPixels[3 * i + 2];
-                outPixels[i] = 0.299f*red + 0.587f*green + 0.114f*blue;
+                // uint8_t red = inPixels[3 * i];
+                // uint8_t green = inPixels[3 * i + 1];
+                // uint8_t blue = inPixels[3 * i + 2];
+                outPixels[i] = 0.299f*inPixels[i].x + 0.587f*inPixels[i].y + 0.114f*inPixels[i].z;
             }
         }
 	}
@@ -170,6 +170,21 @@ char * concatStr(const char * s1, const char * s2)
     return result;
 }
 
+int* sobelOperator()
+
+
+void HostSeamCarving(uchar3 * inPixels, int width, int height,
+		uchar3 * outPixels, int* verticalSobel, int* horizontalSobel,
+		float scalePercentage, dim3 blockSize=dim3(1))
+{
+	uchar3* grayOut
+	convertRgb2Gray(inPixels, width, height, grayOut)
+
+
+
+
+}
+
 void printDeviceInfo()
 {
 	cudaDeviceProp devProv;
@@ -202,13 +217,15 @@ int main(int argc, char ** argv)
 
     int filterWidth = FILTER_WIDTH;
     //vertical sobel
-    float * verticalSobel = (float *)malloc(filterWidth * filterWidth * sizeof(float));
+    int * verticalSobel = (float *)malloc(filterWidth * filterWidth * sizeof(float));
 	verticalSobel = {-1,0,1,-2,0,2,-1,0,1}
     //horizontal sobel
-    float * horizontalSobel = (float *)malloc(filterWidth * filterWidth * sizeof(float));
+    int * horizontalSobel = (float *)malloc(filterWidth * filterWidth * sizeof(float));
 	horizontalSobel = {-1,-2,-1,0,0,0,1,2,1}
 
-	// Set up a simple filter 
+
+	uchar3 * correctOutPixels = (uchar3 *)malloc(width * height * sizeof(uchar3)); 
+	HostSeamCarving(inPixels, width, height, correctOutPixels, verticalSobel, horizontalSobel, scalePercentage, )
 
 
 	// Blur input image not using device
