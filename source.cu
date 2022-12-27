@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
-
+#include <string.h>
 
 #define FILTER_WIDTH 3
 __constant__ float dc_filter[FILTER_WIDTH * FILTER_WIDTH];
@@ -125,9 +125,20 @@ void writePnm(uint8_t * pixels, int numChannels, int width, int height,
 	fclose(f);
 }
 
-void convertRgb2Gray(uint8_t * inPixels, int width, int height,
-		uint8_t * outPixels, 
-		bool useDevice=false, dim3 blockSize=dim3(1))
+__global__ void convertRgb2GrayKernel(uint8_t *inPixels, int width, int height,
+                                      uint8_t *outPixels) {
+  // TODO
+  int r = blockIdx.y * blockDim.y + threadIdx.y;
+  int c = blockIdx.x * blockDim.x + threadIdx.x;
+  // Reminder: gray = 0.299*red + 0.587*green + 0.114*blue
+  if (r < height && c < width) {
+    int i = r * width + c;
+    outPixels[i] = 0.299 * inPixels[3 * i] + 0.587 * inPixels[3 * i + 1] +
+                   0.114 * inPixels[3 * i + 2];
+  }
+}
+
+void convertRgb2Gray(uint8_t * inPixels, int width, int height,uint8_t * outPixels, bool useDevice=false, dim3 blockSize=dim3(1))
 {
 	GpuTimer timer;
 	timer.Start();
@@ -148,36 +159,36 @@ void convertRgb2Gray(uint8_t * inPixels, int width, int height,
 	}
 	else // use device
 	{
-		// size_t nBytes = width * height * sizeof(uint8_t);
-		// cudaDeviceProp devProp;
-		// cudaGetDeviceProperties(&devProp, 0);
-		// printf("GPU name: %s\n", devProp.name);
-		// printf("GPU compute capability: %d.%d\n", devProp.major, devProp.minor);
+		size_t nBytes = width * height * sizeof(uint8_t);
+		cudaDeviceProp devProp;
+		cudaGetDeviceProperties(&devProp, 0);
+		printf("GPU name: %s\n", devProp.name);
+		printf("GPU compute capability: %d.%d\n", devProp.major, devProp.minor);
 
-		// // Host allocates memories on device
-		// uint8_t *d_inPixels,*d_outPixels;
+		// Host allocates memories on device
+		uint8_t *d_inPixels,*d_outPixels;
+		CHECK(cudaMalloc(&d_inPixels, nBytes*3));
+		CHECK(cudaMalloc(&d_outPixels, nBytes));
 
-		// CHECK(cudaMalloc(&d_inPixels, nBytes*3));
-		// CHECK(cudaMalloc(&d_outPixels, nBytes));
-		// // Host copies data to device memories
-		// CHECK(cudaMemcpy(d_inPixels, inPixels, nBytes*3, cudaMemcpyHostToDevice));
-		// // Host invokes kernel function to add vectors on device
-		// dim3 gridSize((width - 1) / blockSize.x + 1, 
-        //         (height - 1) / blockSize.y + 1);
-		// convertRgb2GrayKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, d_outPixels);
-		// // Host copies result from device memory
-		// CHECK(cudaMemcpy(outPixels, d_outPixels, nBytes, cudaMemcpyDeviceToHost));
-		// // Host frees device memories
-		// CHECK(cudaFree(d_inPixels));
-		// CHECK(cudaFree(d_outPixels));
+		// Host copies data to device memories
+		CHECK(cudaMemcpy(d_inPixels, inPixels, nBytes*3, cudaMemcpyHostToDevice));
 
+		// Host invokes kernel function to add vectors on device
+		dim3 gridSize((width - 1) / blockSize.x + 1, (height - 1) / blockSize.y + 1);
+		convertRgb2GrayKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, d_outPixels);
+
+		// Host copies result from device memory
+		CHECK(cudaMemcpy(outPixels, d_outPixels, nBytes, cudaMemcpyDeviceToHost));
+
+		// Host frees device memories
+		CHECK(cudaFree(d_inPixels));
+		CHECK(cudaFree(d_outPixels));
 	}
-	// timer.Stop();
-	// float time = timer.Elapsed();
-	// printf("Processing time (%s): %f ms\n\n", 
-	// 		useDevice == true? "use device" : "use host", time);
+	timer.Stop();
+	float time = timer.Elapsed();
+	printf("Processing time (%s): %f ms\n\n", 
+			useDevice == true? "use device" : "use host", time);
 }
-
 
 char * concatStr(const char * s1, const char * s2)
 {
@@ -187,37 +198,44 @@ char * concatStr(const char * s1, const char * s2)
     return result;
 }
 
-// void sobelOperator(uchar3* inPixels, int width, int height, 
-// 	uchar3 * outPixels, int* verticalSobel, int* horizontalSobel)
-// {
-// 	for (int r = 0; r < height; r++){
-// 		for (int c = 0; c < width; c++){
-// 			int i = r * width + c;
-// 			int Gx = 0;
-// 			int Gy = 0;
-// 			for (int i = -FILTER_WIDTH/2; i <= FILTER_WIDTH/2; i++){
-// 				for (int j =-FILTER_WIDTH/2; j <= FILTER_WIDTH/2; j++){
-// 					int x = c + j;
-// 					int y = r + i;
+void sobelOperator(uchar3* inPixels, int width, int height, uchar3 * outPixels, int* verticalSobel, int* horizontalSobel)
+{
+	int filterR = FILTER_WIDTH/2;
+	for (int r = 0; r < height; r++){
+		for (int c = 0; c < width; c++){
+			int i = r * width + c;
+			int Gx = 0;
+			int Gy = 0;
+			for (int i = -filterR; i <= filterR; i++){
+				for (int j =-filterR; j <= filterR; j++){
+					int x = c + j;
+					int y = r + i;
 
-// 					if (x < 0) {x = 0;}
-// 					else if (x >= width) {x = width - 1;}
-// 					if (y < 0) {y = 0;}
-// 					else if (y >= height) {y = height - 1;}
+					if (x < 0) {
+						x = 0;
+					}
+					else if (x >= width) {
+						x = width - 1;
+					}
+					if (y < 0) {
+						y = 0;
+					}
+					else if (y >= height) {
+						y = height - 1;
+					}
 
-// 					outX += inPixels[y*width + x].x * filter[(i + FILTER_WIDTH/2) * FILTER_WIDTH + j + FILTER_WIDTH/2] ;
-// 				}
-// 			}
+					outX += inPixels[y*width + x].x * filter[(i + filterR) * filterR + j + filterR] ;
+				}
+			}
 
-// 			outPixels[i] = abs(Gx) + abs(Gy)
-// 		}
-// 	}
-// }
-
+			outPixels[i] = abs(Gx) + abs(Gy)
+		}
+	}
+}
 
 void HostSeamCarving(uint8_t * inPixels, int width, int height,
-		int* verticalSobel, int* horizontalSobel,
-		float scalePercentage = 0.75, dim3 blockSize=dim3(1))
+					int* verticalSobel, int* horizontalSobel,
+					float scalePercentage = 0.75, dim3 blockSize=dim3(1))
 {
 	char * outFileNameBase = strtok("gido", "."); // Get rid of extension
 	uint8_t* grayOut = (uint8_t *)malloc(width * height * sizeof(uint8_t)); 
