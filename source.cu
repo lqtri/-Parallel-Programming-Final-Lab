@@ -146,54 +146,6 @@ __global__ void convertRgb2GrayKernel(uint8_t *inPixels, int width, int height,
   }
 }
 
-void convertRgb2Gray(uint8_t * inPixels, int width, int height,uint8_t * outPixels, bool useDevice=false, dim3 blockSize=dim3(1))
-{
-	GpuTimer timer;
-	timer.Start();
-	if (useDevice == false)
-	{
-        // Reminder: gray = 0.299*red + 0.587*green + 0.114*blue  
-        for (int r = 0; r < height; r++)
-        {
-            for (int c = 0; c < width; c++)
-            {
-                int i = r * width + c;
-                uint8_t red = inPixels[3 * i];
-                uint8_t green = inPixels[3 * i + 1];
-                uint8_t blue = inPixels[3 * i + 2];
-                outPixels[i] = 0.299f*red + 0.587f*green + 0.114f*blue;
-            }
-        }
-	}
-	else // use device
-	{
-		size_t nBytes = width * height * sizeof(uint8_t);
-
-		// Host allocates memories on device
-		uint8_t *d_inPixels,*d_outPixels;
-		CHECK(cudaMalloc(&d_inPixels, nBytes*3));
-		CHECK(cudaMalloc(&d_outPixels, nBytes));
-
-		// Host copies data to device memories
-		CHECK(cudaMemcpy(d_inPixels, inPixels, nBytes*3, cudaMemcpyHostToDevice));
-
-		// Host invokes kernel function to add vectors on device
-		dim3 gridSize((width - 1) / blockSize.x + 1, (height - 1) / blockSize.y + 1);
-		convertRgb2GrayKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, d_outPixels);
-
-		// Host copies result from device memory
-		CHECK(cudaMemcpy(outPixels, d_outPixels, nBytes, cudaMemcpyDeviceToHost));
-
-		// Host frees device memories
-		CHECK(cudaFree(d_inPixels));
-		CHECK(cudaFree(d_outPixels));
-	}
-	timer.Stop();
-	float time = timer.Elapsed();
-	printf("Processing time (%s): %f ms\n\n", 
-			useDevice == true? "use device" : "use host", time);
-}
-
 __global__ void energyCalculatingKernel(uint8_t *inPixels, int width, int height,
                                	float *xSobel, float* ySobel,
                                	uint8_t *outPixels) {
@@ -203,7 +155,7 @@ __global__ void energyCalculatingKernel(uint8_t *inPixels, int width, int height
 
   if (r < height && c < width) {
     int i = r * width + c;
-	float value = 0;
+	float xvalue = 0, yvalue = 0;
     for (int r_sobel = -1; r_sobel <= 1; r_sobel++) {
       for (int c_sobel = -1; c_sobel <= 1; c_sobel++) {
 
@@ -225,82 +177,62 @@ __global__ void energyCalculatingKernel(uint8_t *inPixels, int width, int height
 			c_img = c + c_sobel;
 
         int i_img = r_img * width + c_img;
-
-        value += xSobel[i_sobel] * inPixels[i_img];
+		
+        xvalue += xSobel[i_sobel] * inPixels[i_img];
+		yvalue += ySobel[i_sobel] * inPixels[i_img];
       }
     }
-	outPixels[i] = abs(value);
-  }
-
-  __syncthreads();
-  r = blockIdx.y * blockDim.y + threadIdx.y;
-  c = blockIdx.x * blockDim.x + threadIdx.x;
-
-  if (r < height && c < width) {
-    int i = r * width + c;
-	float value = 0;
-    for (int r_sobel = -1; r_sobel <= 1; r_sobel++) {
-      for (int c_sobel = -1; c_sobel <= 1; c_sobel++) {
-
-        int i_sobel = (r_sobel+1)*3 + c_sobel+1;
-        int r_img, c_img;
-
-        if (r+r_sobel<0)
-			r_img = 0;
-		else if (r+r_sobel>height-1)
-			r_img = height - 1;
-		else 
-			r_img = r + r_sobel;
-
-		if (c+c_sobel<0)
-			c_img = 0;
-		else if (c+c_sobel>width-1)
-			c_img = width - 1;
-		else 
-			c_img = c + c_sobel;
-
-        int i_img = r_img * width + c_img;
-
-        value += ySobel[i_sobel] * inPixels[i_img];
-      }
-    }
-	outPixels[i] += abs(value);
+	outPixels[i] = abs(xvalue) + abs(yvalue);
   }
 }
 
-void energyCalculating(uint8_t *inPixels, int width, int height, float *xSobel, float* ySobel, uint8_t* outPixels, bool useDevice = false, dim3 blockSize = dim3(1,1), int kernelType = 1){
-	if (useDevice == false){
-		// host running
-	} else{
+void seamCarving(uint8_t * inPixels, int width, int height, float * xSobel, float * ySobel,
+				uint8_t * grayPixels, uint8_t * energy, bool useDevice=false, dim3 blockSize=dim3(1))
+{
+	GpuTimer timer;
+	timer.Start();
+	if (useDevice == false)
+	{
+		// Host running
+	}
+	else // use device
+	{
 		size_t nBytes = width * height * sizeof(uint8_t);
 
 		// Host allocates memories on device
-		uint8_t *d_inPixels,*d_outPixels;
-		CHECK(cudaMalloc(&d_inPixels, nBytes));
-		CHECK(cudaMalloc(&d_outPixels, nBytes));
+		uint8_t *d_inPixels, *d_grayPixels, *d_energy;
+		CHECK(cudaMalloc(&d_inPixels, nBytes*3));
+		CHECK(cudaMalloc(&d_grayPixels, nBytes));
+		CHECK(cudaMalloc(&d_energy, nBytes));
 
 		// Host copies data to device memories
-		CHECK(cudaMemcpy(d_inPixels, inPixels, nBytes, cudaMemcpyHostToDevice));
+		CHECK(cudaMemcpy(d_inPixels, inPixels, nBytes*3, cudaMemcpyHostToDevice));
 
 		// Host invokes kernel function to add vectors on device
 		dim3 gridSize((width - 1) / blockSize.x + 1, (height - 1) / blockSize.y + 1);
-		energyCalculatingKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, xSobel, ySobel, d_outPixels);
-
-		// Check for errors in the kernel
-		cudaError_t errSync = cudaGetLastError();
-		cudaError_t errAsync = cudaDeviceSynchronize();
-		if (errSync != cudaSuccess)
-		printf("Sync kernel error: %s\n", cudaGetErrorString(errSync));
-		if (errAsync != cudaSuccess)
-		printf("Async kernel error: %s\n", cudaGetErrorString(errAsync));
+		convertRgb2GrayKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, d_grayPixels);
+		cudaDeviceSynchronize();
+        CHECK(cudaGetLastError());
 
 		// Host copies result from device memory
-		CHECK(cudaMemcpy(outPixels, d_outPixels, nBytes, cudaMemcpyDeviceToHost));
+		CHECK(cudaMemcpy(grayPixels, d_grayPixels, nBytes, cudaMemcpyDeviceToHost));
+		
+		energyCalculatingKernel<<<gridSize, blockSize>>>(d_grayPixels, width, height, xSobel, ySobel, d_energy);
+		cudaDeviceSynchronize();
+        CHECK(cudaGetLastError());
+
+		// Host copies result from device memory
+		CHECK(cudaMemcpy(energy, d_energy, nBytes, cudaMemcpyDeviceToHost));
 
 		// Host frees device memories
 		CHECK(cudaFree(d_inPixels));
-		CHECK(cudaFree(d_outPixels));		
+		CHECK(cudaFree(d_grayPixels));
+		CHECK(cudaFree(d_energy));
 	}
+	timer.Stop();
+	float time = timer.Elapsed();
+	printf("Processing time (%s): %f ms\n\n", 
+			useDevice == true? "use device" : "use host", time);
 }
 
 void printDeviceInfo()
@@ -334,7 +266,8 @@ int main(int argc, char ** argv)
 	float ySobel[] = {1, 2, 1, 0, 0, 0, -1, -2, -1};
 
 	// Convert RGB to grayscale using device
-	uint8_t *outPixels = (uint8_t *)malloc(width * height);
+	uint8_t *grayPixels = (uint8_t *)malloc(width * height);
+	uint8_t *energy = (uint8_t *)malloc(width * height);
 	dim3 blockSize(32, 32); // Default
 	if (argc == 5) {
 		blockSize.x = atoi(argv[3]);
@@ -342,18 +275,14 @@ int main(int argc, char ** argv)
 	}
 
 	//Convert to gray scale by device
-	convertRgb2Gray(inPixels, width, height, outPixels, true, blockSize);
+	seamCarving(inPixels, width, height, xSobel, ySobel, grayPixels, energy, true, blockSize);
 	char *outFileNameBase = strtok(argv[1], "."); // Get rid of extension
-	char *fileName = concatStr(outFileNameBase, "_grayscale.pnm");
-	writePnm(outPixels,1, width, height, fileName);
-
-	uint8_t *energy = (uint8_t *)malloc(width * height);
-	energyCalculating(outPixels, width, height, xSobel, ySobel, energy, true, blockSize);
-	writePnm(energy, 1, width, height, concatStr(outFileNameBase, "_energy.pnm"));
+	writePnm(grayPixels,1, width, height, concatStr(outFileNameBase, "_grayscale.pnm"));
+	writePnm(energy,1, width, height, concatStr(outFileNameBase, "_energy.pnm"));
 
 	// Free memories
 	free(inPixels);
-	free(outPixels);
+	free(grayPixels);
 	free(energy);
 
 	return 0;
