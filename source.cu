@@ -221,6 +221,8 @@ void seamCarving(uint8_t * inPixels, int width, int height, float * xSobel, floa
 		CHECK(cudaFree(d_inPixels));
 		CHECK(cudaFree(d_grayPixels));
 		CHECK(cudaFree(d_energy));
+		CHECK(cudaFree(d_xSobel));
+		CHECK(cudaFree(d_ySobel));
 	}
 	timer.Stop();
 	float time = timer.Elapsed();
