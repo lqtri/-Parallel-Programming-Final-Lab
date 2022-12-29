@@ -146,7 +146,7 @@ __global__ void convertRgb2GrayKernel(uint8_t *inPixels, int width, int height,
   }
 }
 
-__global__ void energyCalculatingKernel(uint8_t *inPixels, int width, int height,
+__global__ void energyCalculatorKernel(uint8_t *inPixels, int width, int height,
                                	float *xSobel, float* ySobel,
                                	uint8_t *outPixels) {
 
@@ -172,6 +172,11 @@ __global__ void energyCalculatingKernel(uint8_t *inPixels, int width, int height
     }
 	outPixels[i] = abs(xvalue) + abs(yvalue);
   }
+}
+
+__global__ void seamsImportanceCalculator (uint8_t* energy, int width, int height, uint8_t* map, int8_t* backtrack){
+	int r = blockIdx.y * blockDim.y + threadIdx.y;
+	int c = blockIdx.x * blockDim.x + threadIdx.x;
 }
 
 void seamCarving(uint8_t * inPixels, int width, int height, float * xSobel, float * ySobel,
@@ -210,7 +215,7 @@ void seamCarving(uint8_t * inPixels, int width, int height, float * xSobel, floa
 		// Host copies result from device memory
 		CHECK(cudaMemcpy(grayPixels, d_grayPixels, nBytes, cudaMemcpyDeviceToHost));
 		
-		energyCalculatingKernel<<<gridSize, blockSize>>>(d_grayPixels, width, height, d_xSobel, d_ySobel, d_energy);
+		energyCalculatorKernel<<<gridSize, blockSize>>>(d_grayPixels, width, height, d_xSobel, d_ySobel, d_energy);
 		cudaDeviceSynchronize();
         CHECK(cudaGetLastError());
 
@@ -226,8 +231,7 @@ void seamCarving(uint8_t * inPixels, int width, int height, float * xSobel, floa
 	}
 	timer.Stop();
 	float time = timer.Elapsed();
-	printf("Processing time (%s): %f ms\n\n", 
-			useDevice == true? "use device" : "use host", time);
+	printf("Processing time (%s): %f ms\n\n", useDevice == true? "use device" : "use host", time);
 }
 
 void printDeviceInfo()
