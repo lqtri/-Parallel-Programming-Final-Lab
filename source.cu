@@ -156,31 +156,19 @@ __global__ void energyCalculatingKernel(uint8_t *inPixels, int width, int height
   if (r < height && c < width) {
     int i = r * width + c;
 	float xvalue = 0, yvalue = 0;
-    for (int r_sobel = -1; r_sobel <= 1; r_sobel++) {
-      for (int c_sobel = -1; c_sobel <= 1; c_sobel++) {
+    for (int r_sobel = 0; r_sobel < 3; r_sobel++) {
+      for (int c_sobel = 0; c_sobel < 3; c_sobel++) {
 
-        int i_sobel = (r_sobel+1)*3 + c_sobel+1;
-        int r_img, c_img;
-
-        if (r+r_sobel<0)
-			r_img = 0;
-		else if (r+r_sobel>height-1)
-			r_img = height - 1;
-		else 
-			r_img = r + r_sobel;
-
-		if (c+c_sobel<0)
-			c_img = 0;
-		else if (c+c_sobel>width-1)
-			c_img = width - 1;
-		else 
-			c_img = c + c_sobel;
+        int i_sobel = r_sobel * 3 + c_sobel;
+		int r_img = r - 1 + r_sobel;
+		int c_img = c - 1 + c_sobel;
+		r_img = min(max(0,r_img), height-1);
+		c_img = min(max(0,c_img), width-1);
 
         int i_img = r_img * width + c_img;
-		
         xvalue += xSobel[i_sobel] * inPixels[i_img];
 		yvalue += ySobel[i_sobel] * inPixels[i_img];
-      }
+      } 
     }
 	outPixels[i] = abs(xvalue) + abs(yvalue);
   }
@@ -201,13 +189,18 @@ void seamCarving(uint8_t * inPixels, int width, int height, float * xSobel, floa
 
 		// Host allocates memories on device
 		uint8_t *d_inPixels, *d_grayPixels, *d_energy;
+		float *d_xSobel, *d_ySobel;
 		CHECK(cudaMalloc(&d_inPixels, nBytes*3));
 		CHECK(cudaMalloc(&d_grayPixels, nBytes));
 		CHECK(cudaMalloc(&d_energy, nBytes));
+		CHECK(cudaMalloc(&d_xSobel, 9*sizeof(float)));
+		CHECK(cudaMalloc(&d_ySobel, 9*sizeof(float)));
 
 		// Host copies data to device memories
 		CHECK(cudaMemcpy(d_inPixels, inPixels, nBytes*3, cudaMemcpyHostToDevice));
-
+		CHECK(cudaMemcpy(d_xSobel, xSobel, 9*sizeof(float), cudaMemcpyHostToDevice))
+		CHECK(cudaMemcpy(d_ySobel, ySobel, 9*sizeof(float), cudaMemcpyHostToDevice))
+		
 		// Host invokes kernel function to add vectors on device
 		dim3 gridSize((width - 1) / blockSize.x + 1, (height - 1) / blockSize.y + 1);
 		convertRgb2GrayKernel<<<gridSize, blockSize>>>(d_inPixels, width, height, d_grayPixels);
@@ -217,7 +210,7 @@ void seamCarving(uint8_t * inPixels, int width, int height, float * xSobel, floa
 		// Host copies result from device memory
 		CHECK(cudaMemcpy(grayPixels, d_grayPixels, nBytes, cudaMemcpyDeviceToHost));
 		
-		energyCalculatingKernel<<<gridSize, blockSize>>>(d_grayPixels, width, height, xSobel, ySobel, d_energy);
+		energyCalculatingKernel<<<gridSize, blockSize>>>(d_grayPixels, width, height, d_xSobel, d_ySobel, d_energy);
 		cudaDeviceSynchronize();
         CHECK(cudaGetLastError());
 
@@ -269,9 +262,9 @@ int main(int argc, char ** argv)
 	uint8_t *grayPixels = (uint8_t *)malloc(width * height);
 	uint8_t *energy = (uint8_t *)malloc(width * height);
 	dim3 blockSize(32, 32); // Default
-	if (argc == 5) {
-		blockSize.x = atoi(argv[3]);
-		blockSize.y = atoi(argv[4]);
+	if (argc == 4) {
+		blockSize.x = atoi(argv[2]);
+		blockSize.y = atoi(argv[3]);
 	}
 
 	//Convert to gray scale by device
