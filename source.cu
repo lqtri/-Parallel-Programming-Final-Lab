@@ -184,7 +184,7 @@ __global__ void energyCalculatorKernel(uint8_t *inPixels, int width, int height,
   }
 }
 
-__global__ void seamsImportanceCalculator (uint8_t* map, int8_t* backtrack, int width, int height) {
+__global__ void seamImportanceCalculator (uint8_t* map, int8_t* backtrack, int width, int height) {
 	int r = blockIdx.y * blockDim.y + threadIdx.y;
 	int c = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -352,7 +352,7 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 			// free(testmap);
 
 			//calculate seam importance
-			seamsImportanceCalculator<<<gridSize, blockSize>>>(map, backtrack, w, height);
+			seamImportanceCalculator<<<gridSize, blockSize>>>(map, backtrack, w, height);
 			cudaDeviceSynchronize();
 			CHECK(cudaGetLastError());
 
