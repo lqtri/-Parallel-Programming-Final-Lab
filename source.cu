@@ -125,6 +125,34 @@ void writePnm(uint8_t * pixels, int numChannels, int width, int height,
 
 	fclose(f);
 }
+void writePnmEnergy(int * pixels, int numChannels, int width, int height, 
+		char * fileName)
+{
+	FILE * f = fopen(fileName, "w");
+	if (f == NULL)
+	{
+		printf("Cannot write %s\n", fileName);
+		exit(EXIT_FAILURE);
+	}	
+
+	if (numChannels == 1)
+		fprintf(f, "P2\n");
+	else if (numChannels == 3)
+		fprintf(f, "P3\n");
+	else
+	{
+		fclose(f);
+		printf("Cannot write %s\n", fileName);
+		exit(EXIT_FAILURE);
+	}
+
+	fprintf(f, "%i\n%i\n255\n", width, height); 
+
+	for (int i = 0; i < width * height * numChannels; i++)
+		fprintf(f, "%hhu\n", pixels[i]);
+
+	fclose(f);
+}
 
 char * concatStr(const char * s1, const char * s2)
 {
@@ -167,7 +195,7 @@ __global__ void convertRgb2GrayKernel(uint8_t *inPixels, int width, int height,
 
 __global__ void energyCalculatorKernel(uint8_t *inPixels, int width, int height,
                                	float *xSobel, float* ySobel,
-                               	uint8_t *outPixels) {
+                               	int* energy) {
 
   int r = blockIdx.y * blockDim.y + threadIdx.y;
   int c = blockIdx.x * blockDim.x + threadIdx.x;
@@ -189,7 +217,7 @@ __global__ void energyCalculatorKernel(uint8_t *inPixels, int width, int height,
 		yvalue += ySobel[i_sobel] * inPixels[i_img];
       } 
     }
-	outPixels[i] = abs(xvalue) + abs(yvalue);
+	energy[i] = abs(xvalue) + abs(yvalue);
   }
 }
 
@@ -243,7 +271,7 @@ __global__ void seamImportanceCalculator (int* map, int8_t* backtrack, int width
 	}
 }
 
-__global__ void transferDataKernel (int *dst, uint8_t *src, int width, int height){
+__global__ void transferDataKernel (int *dst, int *src, int width, int height){
 	int r = blockIdx.y * blockDim.y + threadIdx.y;
 	int c = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -260,7 +288,7 @@ __global__ void copyARowKernel (int *dst, int *src, int head, int n){
 		dst[i] = src[i+head];
 }
 
-__global__ void removeInEnergy (uint8_t * energy, int start, int n){
+__global__ void removeInEnergy (int * energy, int start, int n){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i + start + 1 < n){
 		uint8_t value = energy[i + start + 1];
@@ -270,7 +298,6 @@ __global__ void removeInEnergy (uint8_t * energy, int start, int n){
 }
 __global__ void removeInPixels (uint8_t * inPixels, int start, int n){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
-	i*=3;
 	if (i + start + 3 < n){
 		uint8_t value = inPixels[i + start + 3];
 		__syncthreads();
@@ -312,6 +339,18 @@ uint8_t findMinIndexFromHost (int * mins, int * indices, int n){
 	}
 	return min_index;
 }
+uint8_t findMinIndexFromHost1 (int * mins, int n){
+	uint8_t min = mins[0];
+	uint8_t min_index = 0;
+
+	for (int i=1; i<n; i++){
+		if (mins[i] < min){
+			min = mins[i];
+			min_index = i;
+		}
+	}
+	return min_index;
+}
 
 void printSeam(int8_t* backtrack, int width, int index){
 	while (index >= 0){
@@ -320,15 +359,13 @@ void printSeam(int8_t* backtrack, int width, int index){
 	}
 }
 
-void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, int height, int min_index, int8_t * backtrack, dim3 blockSize) {
+void removeSeamFromDevice (uint8_t* d_inPixels, int * d_energy, int width, int height, int min_index, int8_t * backtrack, dim3 blockSize) {
 	int n = width*height;
 	min_index += (width-1)*height;
 	for (int h = 0; h < height; h++) {
 		dim3 gridSize1((n-min_index)/blockSize.x+1,1);
-		dim3 gridSize2(((n-min_index)/blockSize.x+1),1);
+		dim3 gridSize2(((n-min_index)/blockSize.x+1)*3,1);
 		removeInEnergy<<<gridSize1, blockSize>>>(d_energy, min_index, n);	
-		removeInPixels<<<gridSize2, blockSize>>>(d_inPixels, 3*min_index+2, 3*n);
-		removeInPixels<<<gridSize2, blockSize>>>(d_inPixels, 3*min_index+1, 3*n);
 		removeInPixels<<<gridSize2, blockSize>>>(d_inPixels, 3*min_index, 3*n);
 		cudaDeviceSynchronize();
         CHECK(cudaGetLastError());	
@@ -337,7 +374,7 @@ void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, i
 }
 
 void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float * xSobel, float * ySobel,
-				uint8_t * grayPixels, uint8_t * energy, bool useDevice=false, dim3 blockSize=dim3(1))
+				uint8_t * grayPixels, int * energy, bool useDevice=false, dim3 blockSize=dim3(1))
 {
 	GpuTimer timer;
 	timer.Start();
@@ -350,11 +387,12 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 		size_t nBytes = width * height * sizeof(uint8_t);
 
 		// Host allocates memories on device
-		uint8_t *d_inPixels, *d_grayPixels, *d_energy;
+		uint8_t *d_inPixels, *d_grayPixels;
+		int *d_energy;
 		float *d_xSobel, *d_ySobel;
 		CHECK(cudaMalloc(&d_inPixels, nBytes*3));
 		CHECK(cudaMalloc(&d_grayPixels, nBytes));
-		CHECK(cudaMalloc(&d_energy, nBytes));
+		CHECK(cudaMalloc(&d_energy, width * height * sizeof(int)));
 		CHECK(cudaMalloc(&d_xSobel, 9*sizeof(float)));
 		CHECK(cudaMalloc(&d_ySobel, 9*sizeof(float)));
 
@@ -377,7 +415,7 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
         CHECK(cudaGetLastError());
 
 		// Host copies result from device memory
-		CHECK(cudaMemcpy(energy, d_energy, nBytes, cudaMemcpyDeviceToHost));
+		CHECK(cudaMemcpy(energy, d_energy, width*height*sizeof(int), cudaMemcpyDeviceToHost));
 
 		int *d_map;
 		int8_t *d_backtrack;
@@ -400,8 +438,7 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 			cudaDeviceSynchronize();
 			CHECK(cudaGetLastError());
 
-			CHECK(cudaMemcpy(backtrack, d_backtrack, w*height*sizeof(int8_t), cudaMemcpyDeviceToHost));
-
+			//Find min seam
 			int* d_last_row;
 			CHECK(cudaMalloc(&d_last_row, w*sizeof(int)));
 			copyARowKernel<<<gridSize1, blockSize>>>(d_last_row, d_map, (height-1)*w, w);
@@ -423,10 +460,10 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 
 			CHECK(cudaMemcpy(mins, d_mins, mins_size, cudaMemcpyDeviceToHost));
 			CHECK(cudaMemcpy(min_indices, d_min_indices, mins_size, cudaMemcpyDeviceToHost));
-
 			int min_index = findMinIndexFromHost(mins, min_indices, gridSize2.x);
 			
-			// Removing Zone
+			// Remove seam
+			CHECK(cudaMemcpy(backtrack, d_backtrack, w*height*sizeof(int8_t), cudaMemcpyDeviceToHost));
 			removeSeamFromDevice(d_inPixels, d_energy, w, height, min_index, backtrack, blockSize);
 
 			//Free
@@ -490,7 +527,7 @@ int main(int argc, char ** argv)
 
 	// Convert RGB to grayscale using device
 	uint8_t *grayPixels = (uint8_t *)malloc(width * height);
-	uint8_t *energy = (uint8_t*)malloc(width * height * sizeof(uint8_t));
+	int *energy = (int*)malloc(width * height * sizeof(int));
 
 	dim3 blockSize(32, 32); // Default
 	if (argc == 4) {
@@ -501,8 +538,8 @@ int main(int argc, char ** argv)
 	seamCarving(inPixels, width, height, new_width, xSobel, ySobel, grayPixels, energy, true, blockSize);
 	char *outFileNameBase = strtok(argv[1], "."); // Get rid of extension
 	writePnm(grayPixels,1, width, height, concatStr(outFileNameBase, "_grayscale.pnm"));
-	writePnm(energy,1, width, height, concatStr(outFileNameBase, "_energy.pnm"));
-	writePnm(inPixels,3, new_width, height, concatStr(outFileNameBase, "_device.pnm"));
+	writePnmEnergy(energy,1, width, height, concatStr(outFileNameBase, "_energy.pnm"));
+	writePnm(inPixels, 3, new_width, height, concatStr(outFileNameBase, "_device.pnm"));
 
 	// Free memories
 	free(inPixels);
