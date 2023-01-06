@@ -353,7 +353,7 @@ void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, i
 	min_index += (width-1)*height;
 	for (int h = 0; h < height; h++) {
 		dim3 gridSize1((n-min_index)/blockSize.x+1,1);
-		dim3 gridSize2((3*(n-min_index))/blockSize.x+1,1);
+		dim3 gridSize2(((n-min_index)/blockSize.x+1)*3,1);
 		removeInEnergy<<<gridSize1, blockSize>>>(d_energy, min_index, n);	
 		
 		printf("HELLO\n");
