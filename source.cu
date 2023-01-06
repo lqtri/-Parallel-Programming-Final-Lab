@@ -270,6 +270,7 @@ __global__ void removeInEnergy (uint8_t * energy, int start, int n){
 }
 __global__ void removeInPixels (uint8_t * inPixels, int start, int n){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	i*=3;
 	if (i + start + 3 < n){
 		uint8_t value = inPixels[i + start + 3];
 		__syncthreads();
@@ -324,8 +325,10 @@ void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, i
 	min_index += (width-1)*height;
 	for (int h = 0; h < height; h++) {
 		dim3 gridSize1((n-min_index)/blockSize.x+1,1);
-		dim3 gridSize2(((n-min_index)/blockSize.x+1)*3,1);
+		dim3 gridSize2(((n-min_index)/blockSize.x+1),1);
 		removeInEnergy<<<gridSize1, blockSize>>>(d_energy, min_index, n);	
+		removeInPixels<<<gridSize2, blockSize>>>(d_inPixels, 3*min_index+2, 3*n);
+		removeInPixels<<<gridSize2, blockSize>>>(d_inPixels, 3*min_index+1, 3*n);
 		removeInPixels<<<gridSize2, blockSize>>>(d_inPixels, 3*min_index, 3*n);
 		cudaDeviceSynchronize();
         CHECK(cudaGetLastError());	
@@ -499,7 +502,7 @@ int main(int argc, char ** argv)
 	char *outFileNameBase = strtok(argv[1], "."); // Get rid of extension
 	writePnm(grayPixels,1, width, height, concatStr(outFileNameBase, "_grayscale.pnm"));
 	writePnm(energy,1, width, height, concatStr(outFileNameBase, "_energy.pnm"));
-	writePnm(inPixels,1, new_width, height, concatStr(outFileNameBase, "_device.pnm"));
+	writePnm(inPixels,3, new_width, height, concatStr(outFileNameBase, "_device.pnm"));
 
 	// Free memories
 	free(inPixels);
