@@ -319,35 +319,6 @@ void printSeam(int8_t* backtrack, int width, int index){
 	}
 }
 
-// __global__ void removeSeamKernel (uint8_t* energy, uint8_t* inPixels, int width, int height, uint8_t* index, int8_t* backtrack){
-// }
-
-// void removeSeamsFromDevice (uint8_t * inPixels, uint8_t * energy,  uint8_t * new_inPixels, uint8_t * new_energy,
-// 						   int new_width, int height, uint8_t min_index, int8_t * backtrack, dim3 blockSize){
-// 	// Copy a row of energy to device
-// 	size_t rowSize = (new_width+1)*sizeof(uint8_t);
-// 	dim3 gridSize1(new_width/blockSize.x+1,1);
-// 	dim3 gridSize2(3*new_width/blockSize.x+1,1);
-
-
-// 	uint8_t *energy_row, *inPixels_row;
-// 	CHECK(cudaMalloc(&energy_row, rowSize));
-// 	CHECK(cudaMalloc(&inPixels_row, 3*rowSize));
-
-// 	removeASeamNode<<<gridSize1, blockSize>>>(energy_row, energy, (height-1)*new_width, new_width+1);
-// 	removeAPixel<<<gridSize2, blockSize>>>(inPixels_row, inPixels, 3*(height-1)*new_width, 3*(new_width+1));
-// 	cudaDeviceSynchronize();
-// 	CHECK(cudaGetLastError());
-
-
-
-
-// 	CHECK(cudaFree(energy_row));
-// 	CHECK(cudaFree(inPixels_row));
-	
-// 	// copy point: &new_energy[(height-1)*(energy_width-1)]
-// }
-
 void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, int height, int min_index, int8_t * backtrack, dim3 blockSize) {
 	int n = width*height;
 	min_index += (width-1)*height;
@@ -355,12 +326,9 @@ void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, i
 		dim3 gridSize1((n-min_index)/blockSize.x+1,1);
 		dim3 gridSize2(((n-min_index)/blockSize.x+1)*3,1);
 		removeInEnergy<<<gridSize1, blockSize>>>(d_energy, min_index, n);	
-		
-		printf("HELLO\n");
 		removeInPixels<<<gridSize2, blockSize>>>(d_inPixels, 3*min_index, 3*n);
 		cudaDeviceSynchronize();
         CHECK(cudaGetLastError());	
-		printf("HELLO\n");
 		min_index = min_index - width + backtrack[min_index];
 	}
 }
@@ -408,39 +376,34 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 		// Host copies result from device memory
 		CHECK(cudaMemcpy(energy, d_energy, nBytes, cudaMemcpyDeviceToHost));
 
-		int *map;
-		int8_t *backtrack;
-		CHECK(cudaMalloc(&map, width*height*sizeof(int)));
-		CHECK(cudaMalloc(&backtrack, width*height*sizeof(int8_t)));
+		int *d_map;
+		int8_t *d_backtrack;
+		CHECK(cudaMalloc(&d_map, width*height*sizeof(int)));
+		CHECK(cudaMalloc(&d_backtrack, width*height*sizeof(int8_t)));
+
+		int8_t* backtrack = (int8_t*)malloc(width*height*sizeof(int8_t));
 
 		for (int w = width; w > new_width; w--){
 			dim3 gridSize1((w-1)/(blockSize.x)+1, 1);
 			dim3 gridSize2((w-1)/(2*blockSize.x)+1, 1);
 
 			//initialize map (copy from energy), backtrack
-			transferDataKernel<<<gridSize, blockSize>>>(map, d_energy, w, height);
+			transferDataKernel<<<gridSize, blockSize>>>(d_map, d_energy, w, height);
 			cudaDeviceSynchronize();
 			CHECK(cudaGetLastError());
 
 			//calculate seam importance
-			seamImportanceCalculator<<<gridSize1, blockSize>>>(map, backtrack, w, height);
+			seamImportanceCalculator<<<gridSize1, blockSize>>>(d_map, d_backtrack, w, height);
 			cudaDeviceSynchronize();
 			CHECK(cudaGetLastError());
+
+			CHECK(cudaMemcpy(backtrack, d_backtrack, w*height*sizeof(int8_t), cudaMemcpyDeviceToHost));
 
 			int* d_last_row;
 			CHECK(cudaMalloc(&d_last_row, w*sizeof(int)));
-			copyARowKernel<<<gridSize1, blockSize>>>(d_last_row, map, (height-1)*w, w);
+			copyARowKernel<<<gridSize1, blockSize>>>(d_last_row, d_map, (height-1)*w, w);
 			cudaDeviceSynchronize();
 			CHECK(cudaGetLastError());
-
-			// uint8_t* row = (uint8_t*)malloc(w*sizeof(uint8_t));
-			// CHECK(cudaMemcpy(row, d_last_row, w*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-			// printf("\nLAST SEAM IMPORTANCE ROW\n");
-			// for (int t = 0; t<w; t++){
-			// 	printf("%d ", row[t]);
-			// }
-			// printf("\n");
-			// free(row);
 
 			size_t mins_size = gridSize2.x * sizeof(int);
 			int* mins = (int*) malloc(mins_size);
@@ -479,8 +442,9 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 		CHECK(cudaFree(d_energy));
 		CHECK(cudaFree(d_xSobel));
 		CHECK(cudaFree(d_ySobel));
-		CHECK(cudaFree(map));
-		CHECK(cudaFree(backtrack));
+		CHECK(cudaFree(d_map));
+		CHECK(cudaFree(d_backtrack));
+		free(backtrack);
 	}
 	timer.Stop();
 	float time = timer.Elapsed();
