@@ -193,7 +193,7 @@ __global__ void energyCalculatorKernel(uint8_t *inPixels, int width, int height,
   }
 }
 
-__global__ void seamImportanceCalculator (uint8_t* map, int8_t* backtrack, int width, int height) {
+__global__ void seamImportanceCalculator (int* map, int8_t* backtrack, int width, int height) {
 	int t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t<width) 
 		backtrack[t] = 0;
@@ -243,7 +243,7 @@ __global__ void seamImportanceCalculator (uint8_t* map, int8_t* backtrack, int w
 	}
 }
 
-__global__ void transferDataKernel (uint8_t *dst, uint8_t *src, int width, int height){
+__global__ void transferDataKernel (int *dst, uint8_t *src, int width, int height){
 	int r = blockIdx.y * blockDim.y + threadIdx.y;
 	int c = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -253,7 +253,7 @@ __global__ void transferDataKernel (uint8_t *dst, uint8_t *src, int width, int h
 	}
 }
 
-__global__ void copyARowKernel (uint8_t *dst, uint8_t *src, int head, int n){
+__global__ void copyARowKernel (int *dst, int *src, int head, int n){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 
 	if (i < n)
@@ -277,9 +277,9 @@ __global__ void removeInPixels (uint8_t * inPixels, int start, int n){
 	}
 }	
 
-__global__ void findMinsKernel(uint8_t * in, int n, uint8_t* mins, uint8_t* min_indices)
+__global__ void findMinsKernel(int * in, int n, int* mins, int* min_indices)
 {
-	__shared__ uint8_t sm_min_index[1];
+	__shared__ int sm_min_index[1];
     int numElemsBeforeBlk = blockIdx.x * blockDim.x * 2;
     int i = numElemsBeforeBlk + threadIdx.x;
     for (int stride = blockDim.x; stride >= 1; stride /= 2) {
@@ -299,7 +299,7 @@ __global__ void findMinsKernel(uint8_t * in, int n, uint8_t* mins, uint8_t* min_
 	}
 }
 
-uint8_t findMinIndexFromHost (uint8_t * mins, uint8_t * indices, int n){
+uint8_t findMinIndexFromHost (int * mins, int * indices, int n){
 	uint8_t min = mins[0];
 	uint8_t min_index = indices[0];
 
@@ -348,7 +348,7 @@ void printSeam(int8_t* backtrack, int width, int index){
 // 	// copy point: &new_energy[(height-1)*(energy_width-1)]
 // }
 
-void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, int height, uint8_t min_index, int8_t * backtrack, dim3 blockSize) {
+void removeSeamFromDevice (uint8_t* d_inPixels, uint8_t * d_energy, int width, int height, int min_index, int8_t * backtrack, dim3 blockSize) {
 	int n = width*height;
 	min_index += (width-1)*height;
 	for (int h = 0; h < height; h++) {
@@ -408,10 +408,10 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 		// Host copies result from device memory
 		CHECK(cudaMemcpy(energy, d_energy, nBytes, cudaMemcpyDeviceToHost));
 
-		uint8_t *map;
+		int *map;
 		int8_t *backtrack;
-		CHECK(cudaMalloc(&map, nBytes));
-		CHECK(cudaMalloc(&backtrack, width*height*sizeof(int)));
+		CHECK(cudaMalloc(&map, width*height*sizeof(int)));
+		CHECK(cudaMalloc(&backtrack, width*height*sizeof(int8_t)));
 
 		for (int w = width; w > new_width; w--){
 			dim3 gridSize1((w-1)/(blockSize.x)+1, 1);
@@ -427,8 +427,8 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 			cudaDeviceSynchronize();
 			CHECK(cudaGetLastError());
 
-			uint8_t* d_last_row;
-			CHECK(cudaMalloc(&d_last_row, w*sizeof(uint8_t)));
+			int* d_last_row;
+			CHECK(cudaMalloc(&d_last_row, w*sizeof(int)));
 			copyARowKernel<<<gridSize1, blockSize>>>(d_last_row, map, (height-1)*w, w);
 			cudaDeviceSynchronize();
 			CHECK(cudaGetLastError());
@@ -442,12 +442,12 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 			// printf("\n");
 			// free(row);
 
-			size_t mins_size = gridSize2.x * sizeof(uint8_t);
-			uint8_t* mins = (uint8_t*) malloc(mins_size);
-			uint8_t* min_indices = (uint8_t*) malloc(mins_size);		
+			size_t mins_size = gridSize2.x * sizeof(int);
+			int* mins = (int*) malloc(mins_size);
+			int* min_indices = (int*) malloc(mins_size);		
 
-			uint8_t* d_mins;
-			uint8_t* d_min_indices;
+			int* d_mins;
+			int* d_min_indices;
 			CHECK(cudaMalloc(&d_mins, mins_size));
 			CHECK(cudaMalloc(&d_min_indices, mins_size));
 
@@ -458,7 +458,7 @@ void seamCarving(uint8_t * inPixels, int width, int height, int new_width, float
 			CHECK(cudaMemcpy(mins, d_mins, mins_size, cudaMemcpyDeviceToHost));
 			CHECK(cudaMemcpy(min_indices, d_min_indices, mins_size, cudaMemcpyDeviceToHost));
 
-			uint8_t min_index = findMinIndexFromHost(mins, min_indices, gridSize2.x);
+			int min_index = findMinIndexFromHost(mins, min_indices, gridSize2.x);
 			
 			// Removing Zone
 			removeSeamFromDevice(d_inPixels, d_energy, w, height, min_index, backtrack, blockSize);
