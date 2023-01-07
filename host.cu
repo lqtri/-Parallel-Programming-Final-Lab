@@ -3,7 +3,6 @@
 #include <string.h>
 
 #define FILTER_WIDTH 3
-__constant__ float dc_filter[FILTER_WIDTH * FILTER_WIDTH];
 
 #define CHECK(call)\
 {\
@@ -294,7 +293,7 @@ void HostSeamCarving(uint8_t * inPixels, int width, int height,
 	float time = timer.Elapsed();
 
 	printf("Processing time (use host): %f ms\n\n", time+time1+time2);
-    char filename3[] = "host_result";
+    char filename3[] = "host_result.pnm";
 	writePnm(inPixels,3, scaling_width, height, filename3);
 
     free(grayOut);
